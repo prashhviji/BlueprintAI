@@ -1,37 +1,41 @@
 import type { Metadata } from "next";
-import localFont from "next/font/local";
+import { Inter, JetBrains_Mono, Fraunces } from "next/font/google";
 import "./globals.css";
 import { ToastProvider } from "@/components/ui/toast";
+import { CommandPaletteProvider } from "@/components/ui/command-palette";
 
-const geistSans = localFont({
-  src: "./fonts/GeistVF.woff",
-  variable: "--font-geist-sans",
-  weight: "100 900",
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-body",
+  display: "swap",
 });
-const geistMono = localFont({
-  src: "./fonts/GeistMonoVF.woff",
-  variable: "--font-geist-mono",
-  weight: "100 900",
+const mono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+});
+const display = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-display",
+  display: "swap",
+  axes: ["opsz", "SOFT", "WONK"],
 });
 
 export const metadata: Metadata = {
-  title: "BluePrintAI — Floor plans + BOQ in seconds",
+  title: "BluePrintAI — Draw faster. Quote sharper.",
   description:
-    "Describe your dream home in plain English. Get an editable floor plan, walk-through 3D, and a fully detailed Bill of Quantities in INR.",
+    "Describe your project in plain English. Get an editable 2D floor plan, a 3D walk-through, and a fully detailed Bill of Quantities in INR.",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-background`}
-        style={{ fontFamily: "var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif" }}
-      >
-        <ToastProvider>{children}</ToastProvider>
+    <html lang="en" data-theme="dark" suppressHydrationWarning className={`${inter.variable} ${mono.variable} ${display.variable}`}>
+      <body className="bg-base text-primary antialiased">
+        <ToastProvider>
+          <CommandPaletteProvider>{children}</CommandPaletteProvider>
+        </ToastProvider>
       </body>
     </html>
   );
