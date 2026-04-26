@@ -1,10 +1,21 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { z } from "zod";
 import { type PlanSpec } from "@/lib/solver/solver";
 import { buildDemoSpec } from "./demo";
 
-const SPEC_SYSTEM_PROMPT = `You are an architectural layout assistant for Indian residential projects. Return ONLY a JSON object (no prose, no markdown) shaped like:
+// ──────────────────────────────────────────────────────────────────────────
+// System prompt — generous detail + few-shot examples so the LLM produces
+// faithful output for unusual prompts ("4BHK with home theatre, 50x60 ft").
+// ──────────────────────────────────────────────────────────────────────────
+
+const SPEC_SYSTEM_PROMPT = `You are an architectural layout assistant for Indian residential projects.
+
+Your one job: turn a free-text brief into a JSON object describing the rooms the user asked for.
+
+# Output schema (return ONLY this JSON — no prose, no markdown fences)
+
 {
   "plot": { "w": <number, mm>, "h": <number, mm> },
   "rooms": [
@@ -12,14 +23,68 @@ const SPEC_SYSTEM_PROMPT = `You are an architectural layout assistant for Indian
   ],
   "budget": <integer rupees, optional>
 }
-Rules:
-- Plot in mm (multiply meters by 1000). If user gives plot in feet, convert (1 ft = 304.8 mm).
-- Areas in sqm. Total room area should be roughly 60-75% of plot area.
-- "public" = living/dining/kitchen/foyer, "private" = bedrooms/bathrooms/study, "service" = utility/store.
-- Exactly ONE room must have entry:true (the entry room, usually the living/foyer).
-- Typical sizes: living 18-30 sqm, master bedroom 12-16, bedroom2 9-12, bath 3-5, kitchen 8-12, balcony 4-7.
-- Use sensible Indian residential proportions.
-- Return JSON ONLY, no prose, no markdown fences.`;
+
+# Hard rules
+
+- Plot in mm. Convert: meters × 1000, feet × 304.8, square-feet × 0.0929 → sqm, infer aspect ratio (use ≈ 2:3 unless given).
+- Areas in sqm. Total room area should be 60–75% of plot area.
+- "public" = living, dining, kitchen, foyer, family
+- "private" = bedrooms, bathrooms, toilets, study, walk-in closet
+- "service" = utility, store, servant, garage
+- Exactly ONE room must have entry: true (the entry room — usually the living/foyer).
+- Each room "id" must be a short unique slug like "living", "mbr", "br2", "bath", "kitchen", "puja".
+- Sensible Indian residential sizes: living 18–30, master bedroom 12–16, bedroom 9–12, bath 3–5, kitchen 8–12, balcony 4–7, store 4–6, puja 3–5.
+
+# Faithfulness
+
+Build EXACTLY what the user asked for. Don't add rooms they didn't ask for. Don't drop rooms they did ask for.
+Honor counts: "3BHK" = 3 bedrooms; "with study and store" = include both; "no balcony" = omit balcony.
+Honor styles: "luxury", "spacious", "compact" → scale areas accordingly (×1.2, ×1.0, ×0.85).
+
+# Few-shot examples
+
+Brief: "2BHK in Anand, 8x11m plot, north-facing entry, ₹24L budget"
+{"plot":{"w":11460,"h":8460},"rooms":[
+ {"id":"living","name":"Living / Dining","area":24.75,"zone":"public","entry":true},
+ {"id":"kitchen","name":"Kitchen","area":9,"zone":"public"},
+ {"id":"utility","name":"Utility","area":6.8,"zone":"service"},
+ {"id":"mbr","name":"Master Bedroom","area":13.7,"zone":"private"},
+ {"id":"bath","name":"Bath","area":4.2,"zone":"private"},
+ {"id":"br2","name":"Bedroom 2","area":9.8,"zone":"private"},
+ {"id":"balcony","name":"Balcony","area":5.7,"zone":"private"}
+],"budget":2400000}
+
+Brief: "compact 1BHK studio, 6x8m, balcony"
+{"plot":{"w":6000,"h":8000},"rooms":[
+ {"id":"studio","name":"Studio","area":18,"zone":"public","entry":true},
+ {"id":"kitchenette","name":"Kitchenette","area":5,"zone":"service"},
+ {"id":"bath","name":"Bath","area":3.5,"zone":"private"},
+ {"id":"balcony","name":"Balcony","area":4.5,"zone":"private"}
+]}
+
+Brief: "luxury 4BHK villa 14x16m with study, puja room, store"
+{"plot":{"w":14000,"h":16000},"rooms":[
+ {"id":"living","name":"Living / Dining","area":36,"zone":"public","entry":true},
+ {"id":"kitchen","name":"Kitchen","area":13,"zone":"public"},
+ {"id":"utility","name":"Utility","area":7,"zone":"service"},
+ {"id":"store","name":"Store","area":5,"zone":"service"},
+ {"id":"mbr","name":"Master Bedroom","area":18,"zone":"private"},
+ {"id":"mbath","name":"Master Bath","area":6,"zone":"private"},
+ {"id":"br2","name":"Bedroom 2","area":13,"zone":"private"},
+ {"id":"br3","name":"Bedroom 3","area":12,"zone":"private"},
+ {"id":"br4","name":"Bedroom 4","area":12,"zone":"private"},
+ {"id":"bath","name":"Common Bath","area":4.5,"zone":"private"},
+ {"id":"powder","name":"Powder Room","area":2.5,"zone":"private"},
+ {"id":"study","name":"Study","area":10,"zone":"private"},
+ {"id":"puja","name":"Puja Room","area":4,"zone":"private"},
+ {"id":"balcony","name":"Balcony","area":7,"zone":"private"}
+]}
+
+Now generate JSON for the user's brief. Return ONLY the JSON object.`;
+
+// ──────────────────────────────────────────────────────────────────────────
+// Schemas
+// ──────────────────────────────────────────────────────────────────────────
 
 const RoomSpecSchema = z.object({
   id: z.string().min(1),
@@ -38,11 +103,30 @@ const PlanSpecSchema = z.object({
   budget: z.number().min(0).optional(),
 });
 
+// ──────────────────────────────────────────────────────────────────────────
+// Provider availability + public types
+// ──────────────────────────────────────────────────────────────────────────
+
+export type ProviderId = "gemini" | "claude" | "openai" | "demo";
+
+export function aiProviders(): { id: ProviderId; available: boolean; label: string }[] {
+  return [
+    { id: "gemini", available: !!process.env.GEMINI_API_KEY,    label: "Gemini 2.0 Flash" },
+    { id: "claude", available: !!process.env.ANTHROPIC_API_KEY, label: "Claude Sonnet 4.6" },
+    { id: "openai", available: !!process.env.OPENAI_API_KEY,    label: "GPT-4o-mini" },
+    { id: "demo",   available: true,                            label: "Heuristic parser" },
+  ];
+}
+
 export type SpecGenerateResult = {
   spec: PlanSpec;
-  source: "gemini" | "claude" | "demo";
+  source: ProviderId;
   warnings: string[];
 };
+
+// ──────────────────────────────────────────────────────────────────────────
+// Main entrypoint
+// ──────────────────────────────────────────────────────────────────────────
 
 export async function generateSpec(args: {
   prompt: string;
@@ -51,64 +135,61 @@ export async function generateSpec(args: {
   const warnings: string[] = [];
   const userMsg = args.prompt;
 
-  const hasGemini = !!process.env.GEMINI_API_KEY;
-  const hasClaude = !!process.env.ANTHROPIC_API_KEY;
+  const order: { id: Exclude<ProviderId, "demo">; fn: (m: string) => Promise<unknown>; }[] = [];
+  if (process.env.GEMINI_API_KEY)    order.push({ id: "gemini", fn: callGemini });
+  if (process.env.ANTHROPIC_API_KEY) order.push({ id: "claude", fn: callClaude });
+  if (process.env.OPENAI_API_KEY)    order.push({ id: "openai", fn: callOpenAI });
 
-  if (!hasGemini && !hasClaude) {
-    return {
-      spec: buildDemoSpec({ prompt: args.prompt }),
-      source: "demo",
-      warnings: ["LLM keys not configured — used heuristic parser"],
-    };
-  }
-
-  if (hasGemini) {
-    for (let i = 0; i < 2; i++) {
+  for (const provider of order) {
+    // 2 attempts per provider — first vanilla, second with explicit error feedback.
+    let lastError: string | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const spec = await callGeminiForSpec(userMsg);
-        return { spec: { ...spec, prompt: args.prompt }, source: "gemini", warnings };
+        const msg =
+          attempt === 0
+            ? userMsg
+            : `${userMsg}\n\nThe previous response was invalid (${lastError}). Return ONLY a valid JSON object matching the schema.`;
+        const raw = await provider.fn(msg);
+        const parsed = parseAndValidateSpec(raw);
+        return { spec: { ...parsed, prompt: args.prompt }, source: provider.id, warnings };
       } catch (e) {
-        warnings.push(`Gemini attempt ${i + 1} failed: ${(e as Error).message}`);
+        lastError = (e as Error).message.slice(0, 200);
+        warnings.push(`${provider.id} attempt ${attempt + 1}: ${lastError}`);
       }
     }
   }
 
-  if (hasClaude) {
-    try {
-      const spec = await callClaudeForSpec(userMsg);
-      return { spec: { ...spec, prompt: args.prompt }, source: "claude", warnings };
-    } catch (e) {
-      warnings.push(`Claude failed: ${(e as Error).message}`);
-    }
-  }
-
+  // Final fallback — heuristic parser. Always works.
   const fallback = buildDemoSpec({ prompt: args.prompt });
   return {
     spec: { ...fallback, plot: args.fallbackPlot ?? fallback.plot },
     source: "demo",
-    warnings: [...warnings, "All LLM attempts failed — falling back to heuristic parser"],
+    warnings: warnings.length
+      ? warnings
+      : ["LLM keys not configured — used heuristic parser. Set GEMINI_API_KEY or ANTHROPIC_API_KEY in apps/web/.env.local for full AI."],
   };
 }
 
-async function callGeminiForSpec(userMsg: string): Promise<PlanSpec> {
-  const apiKey = process.env.GEMINI_API_KEY!;
-  const ai = new GoogleGenerativeAI(apiKey);
+// ──────────────────────────────────────────────────────────────────────────
+// Provider implementations
+// ──────────────────────────────────────────────────────────────────────────
+
+async function callGemini(userMsg: string): Promise<unknown> {
+  const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
   const model = ai.getGenerativeModel({
     model: "gemini-2.0-flash",
     generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
     systemInstruction: SPEC_SYSTEM_PROMPT,
   });
   const r = await model.generateContent(userMsg);
-  const text = r.response.text();
-  return PlanSpecSchema.parse(JSON.parse(text)) as PlanSpec;
+  return JSON.parse(r.response.text());
 }
 
-async function callClaudeForSpec(userMsg: string): Promise<PlanSpec> {
-  const apiKey = process.env.ANTHROPIC_API_KEY!;
-  const ai = new Anthropic({ apiKey });
+async function callClaude(userMsg: string): Promise<unknown> {
+  const ai = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
   const r = await ai.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 2000,
+    max_tokens: 4000,
     system: SPEC_SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMsg }],
   });
@@ -116,18 +197,61 @@ async function callClaudeForSpec(userMsg: string): Promise<PlanSpec> {
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
     .join("");
+  return JSON.parse(extractJsonObject(text));
+}
+
+async function callOpenAI(userMsg: string): Promise<unknown> {
+  const ai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+  const r = await ai.chat.completions.create({
+    model: "gpt-4o-mini",
+    response_format: { type: "json_object" },
+    temperature: 0.2,
+    messages: [
+      { role: "system", content: SPEC_SYSTEM_PROMPT },
+      { role: "user",   content: userMsg },
+    ],
+  });
+  const text = r.choices[0]?.message.content ?? "{}";
+  return JSON.parse(extractJsonObject(text));
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────────────
+
+function extractJsonObject(text: string): string {
   let cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   const fb = cleaned.indexOf("{");
   const lb = cleaned.lastIndexOf("}");
   if (fb >= 0 && lb >= 0) cleaned = cleaned.slice(fb, lb + 1);
-  return PlanSpecSchema.parse(JSON.parse(cleaned)) as PlanSpec;
+  return cleaned;
 }
 
-/**
- * Per-room edit — given an existing room and an instruction, return the
- * updated single-room spec (id stays, name/area/zone may change).
- */
-const ROOM_EDIT_SYSTEM = `You are editing ONE room in a residential floor plan. Return ONLY a JSON object: { "id": "<same id>", "name": "<New Name>", "area": <new sqm>, "zone": "public"|"private"|"service" }. No prose. Sensible Indian residential sizes only.`;
+function parseAndValidateSpec(raw: unknown): z.infer<typeof PlanSpecSchema> {
+  const parsed = PlanSpecSchema.parse(raw);
+  if (!parsed.rooms.some((r) => r.entry)) {
+    parsed.rooms[0]!.entry = true; // self-heal one common LLM omission
+  }
+  return parsed;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Per-room AI edit
+// ──────────────────────────────────────────────────────────────────────────
+
+const ROOM_EDIT_SYSTEM = `You are editing ONE room in a residential floor plan.
+
+Input: a JSON object describing the current room and the user's instruction.
+Output: ONLY a JSON object: { "id": "<same id>", "name": "<New Name>", "area": <new sqm>, "zone": "public"|"private"|"service" }. No prose. Sensible Indian residential sizes only.
+
+Examples:
+- "make this a study with desk" → { "id": "...", "name": "Study", "area": 9, "zone": "private" }
+- "double the size" → keep name + zone, double the area (cap at 30 sqm)
+- "convert to puja room" → { "id": "...", "name": "Puja Room", "area": 4, "zone": "private" }
+- "make it a guest bedroom" → { "id": "...", "name": "Guest Bedroom", "area": 11, "zone": "private" }
+- "shrink it" → keep name + zone, halve the area (floor at 3 sqm)
+
+Return ONLY the JSON.`;
 
 const RoomEditSchema = z.object({
   id: z.string(),
@@ -139,18 +263,17 @@ const RoomEditSchema = z.object({
 export async function generateRoomEdit(args: {
   room: { id: string; name: string; area: number; zone: string };
   instruction: string;
-}): Promise<{ id: string; name: string; area: number; zone: "public" | "private" | "service"; source: "gemini" | "claude" | "demo" }> {
+}): Promise<{
+  id: string;
+  name: string;
+  area: number;
+  zone: "public" | "private" | "service";
+  source: ProviderId;
+}> {
   const userMsg = `Current room: ${JSON.stringify(args.room)}\nInstruction: "${args.instruction}"`;
 
-  const hasGemini = !!process.env.GEMINI_API_KEY;
-  const hasClaude = !!process.env.ANTHROPIC_API_KEY;
-
-  if (!hasGemini && !hasClaude) {
-    return demoRoomEdit(args);
-  }
-
-  if (hasGemini) {
-    try {
+  const tryProvider = async (id: Exclude<ProviderId, "demo">) => {
+    if (id === "gemini") {
       const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
       const model = ai.getGenerativeModel({
         model: "gemini-2.0-flash",
@@ -158,15 +281,9 @@ export async function generateRoomEdit(args: {
         systemInstruction: ROOM_EDIT_SYSTEM,
       });
       const r = await model.generateContent(userMsg);
-      const parsed = RoomEditSchema.parse(JSON.parse(r.response.text()));
-      return { ...parsed, source: "gemini" };
-    } catch {
-      // fall through to Claude
+      return JSON.parse(r.response.text());
     }
-  }
-
-  if (hasClaude) {
-    try {
+    if (id === "claude") {
       const ai = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
       const r = await ai.messages.create({
         model: "claude-sonnet-4-6",
@@ -178,42 +295,56 @@ export async function generateRoomEdit(args: {
         .filter((b): b is Anthropic.TextBlock => b.type === "text")
         .map((b) => b.text)
         .join("");
-      let cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-      const fb = cleaned.indexOf("{");
-      const lb = cleaned.lastIndexOf("}");
-      if (fb >= 0 && lb >= 0) cleaned = cleaned.slice(fb, lb + 1);
-      const parsed = RoomEditSchema.parse(JSON.parse(cleaned));
-      return { ...parsed, source: "claude" };
+      return JSON.parse(extractJsonObject(text));
+    }
+    // openai
+    const ai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+    const r = await ai.chat.completions.create({
+      model: "gpt-4o-mini",
+      response_format: { type: "json_object" },
+      temperature: 0.3,
+      messages: [
+        { role: "system", content: ROOM_EDIT_SYSTEM },
+        { role: "user",   content: userMsg },
+      ],
+    });
+    return JSON.parse(extractJsonObject(r.choices[0]?.message.content ?? "{}"));
+  };
+
+  const order: ("gemini" | "claude" | "openai")[] = [];
+  if (process.env.GEMINI_API_KEY)    order.push("gemini");
+  if (process.env.ANTHROPIC_API_KEY) order.push("claude");
+  if (process.env.OPENAI_API_KEY)    order.push("openai");
+
+  for (const id of order) {
+    try {
+      const raw = await tryProvider(id);
+      const parsed = RoomEditSchema.parse(raw);
+      return { ...parsed, source: id };
     } catch {
-      // fall through
+      // try next
     }
   }
-
   return demoRoomEdit(args);
 }
 
 function demoRoomEdit(args: {
   room: { id: string; name: string; area: number; zone: string };
   instruction: string;
-}): {
-  id: string;
-  name: string;
-  area: number;
-  zone: "public" | "private" | "service";
-  source: "demo";
-} {
-  // Simple keyword-based heuristics for demo mode
+}): { id: string; name: string; area: number; zone: "public" | "private" | "service"; source: "demo" } {
   const ins = args.instruction.toLowerCase();
   let { name, area } = args.room;
   let zone = (args.room.zone as "public" | "private" | "service") || "private";
 
-  if (/double|larger|bigger|expand/i.test(ins)) area = Math.min(60, area * 2);
-  if (/half|smaller|shrink/i.test(ins)) area = Math.max(3, area / 2);
-  if (/study/i.test(ins)) { name = "Study"; zone = "private"; area = Math.max(area, 8); }
-  if (/walk.?in.*closet|closet/i.test(ins)) { name = "Walk-in Closet"; zone = "private"; }
-  if (/puja|pooja|prayer/i.test(ins)) { name = "Puja Room"; zone = "private"; area = 4; }
-  if (/kitchen/i.test(ins)) { name = "Kitchen"; zone = "public"; }
-  if (/utility/i.test(ins)) { name = "Utility"; zone = "service"; }
+  if (/double|larger|bigger|expand/.test(ins)) area = Math.min(60, area * 2);
+  if (/half|smaller|shrink/.test(ins)) area = Math.max(3, area / 2);
+  if (/study/.test(ins))                   { name = "Study";           zone = "private"; area = Math.max(area, 8); }
+  if (/walk.?in.*closet|closet/.test(ins)) { name = "Walk-in Closet";  zone = "private"; }
+  if (/puja|pooja|prayer/.test(ins))       { name = "Puja Room";       zone = "private"; area = 4; }
+  if (/kitchen/.test(ins))                 { name = "Kitchen";         zone = "public"; }
+  if (/utility/.test(ins))                 { name = "Utility";         zone = "service"; }
+  if (/guest/.test(ins))                   { name = "Guest Bedroom";   zone = "private"; area = Math.max(area, 11); }
+  if (/store/.test(ins))                   { name = "Store";           zone = "service"; area = 5; }
 
   return { id: args.room.id, name, area, zone, source: "demo" };
 }

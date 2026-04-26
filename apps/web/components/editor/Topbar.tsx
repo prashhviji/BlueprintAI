@@ -5,6 +5,7 @@ import { Share, Download, ChevronDown } from "@/components/icons";
 import { useEditor, selectActiveFloor } from "@/lib/store/editor";
 import { Button } from "@/components/ui/button";
 import { formatINRShort } from "@/lib/utils";
+import { AiStatus } from "./AiStatus";
 
 export function Topbar({
   onExport,
@@ -58,6 +59,7 @@ export function Topbar({
       </div>
 
       <div className="flex items-center justify-end gap-2">
+        <AiStatus />
         <Button variant="secondary" size="sm" className="gap-1.5">
           <Share size={14} /> Share
         </Button>
