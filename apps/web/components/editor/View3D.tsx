@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, Sky, Environment, Grid } from "@react-three/drei";
+import { OrbitControls, Sky, Grid } from "@react-three/drei";
 import * as THREE from "three";
 import type { SolvedPlan, SolvedRoom } from "@/lib/solver/solver";
 import { useEditor, selectActiveFloor } from "@/lib/store/editor";
@@ -119,9 +119,10 @@ function Scene({
         shadow-camera-top={30}
         shadow-camera-bottom={-30}
       />
-      <hemisphereLight args={["#bfdbfe", "#94a3b8", 0.4]} />
+      <hemisphereLight args={["#bfdbfe", "#94a3b8", 0.55]} />
       <Sky distance={4500} sunPosition={[100, 30, 50]} inclination={0.49} azimuth={0.25} />
-      <Environment preset="city" />
+      {/* No <Environment preset> — preset HDRs are network-fetched and would
+          violate our CSP. The four lights above + Sky give plenty of fidelity. */}
 
       {/* Ground */}
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[cx, -0.001, cz]}>

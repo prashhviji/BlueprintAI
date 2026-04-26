@@ -4,6 +4,13 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { type PlanSpec } from "@/lib/solver/solver";
 import { buildDemoSpec } from "./demo";
+import { isOverBudget, recordTokenUsage } from "@/lib/security/budget";
+import { logEvent } from "@/lib/security/logger";
+
+/** Hard cap on output tokens per LLM call — second line of defence after the
+ *  daily-budget kill switch. Pick a value that fits the largest valid spec
+ *  comfortably (≈ 800 tokens for a luxury 4BHK example). */
+const MAX_OUTPUT_TOKENS = 1500;
 
 // ──────────────────────────────────────────────────────────────────────────
 // System prompt — generous detail + few-shot examples so the LLM produces
@@ -141,6 +148,15 @@ export async function generateSpec(args: {
   if (process.env.OPENAI_API_KEY)    order.push({ id: "openai", fn: callOpenAI });
 
   for (const provider of order) {
+    // Daily-spend kill switch — refuse calls if today's budget is exhausted.
+    if (isOverBudget(provider.id, MAX_OUTPUT_TOKENS)) {
+      warnings.push(`${provider.id}: daily token budget exhausted — skipping`);
+      logEvent({
+        level: "warn", route: "llm.budget", provider: provider.id,
+        event: "daily_budget_exhausted",
+      });
+      continue;
+    }
     // 2 attempts per provider — first vanilla, second with explicit error feedback.
     let lastError: string | null = null;
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -151,10 +167,16 @@ export async function generateSpec(args: {
             : `${userMsg}\n\nThe previous response was invalid (${lastError}). Return ONLY a valid JSON object matching the schema.`;
         const raw = await provider.fn(msg);
         const parsed = parseAndValidateSpec(raw);
+        // Charge a defensive estimate when the SDK doesn't return real usage.
+        recordTokenUsage(provider.id, MAX_OUTPUT_TOKENS);
         return { spec: { ...parsed, prompt: args.prompt }, source: provider.id, warnings };
       } catch (e) {
         lastError = (e as Error).message.slice(0, 200);
-        warnings.push(`${provider.id} attempt ${attempt + 1}: ${lastError}`);
+        warnings.push(`${provider.id} attempt ${attempt + 1} failed`);
+        logEvent({
+          level: "warn", route: "llm.attempt", provider: provider.id,
+          event: "attempt_failed", error: lastError,
+        });
       }
     }
   }
@@ -178,7 +200,11 @@ async function callGemini(userMsg: string): Promise<unknown> {
   const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
   const model = ai.getGenerativeModel({
     model: "gemini-2.0-flash",
-    generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.2,
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+    },
     systemInstruction: SPEC_SYSTEM_PROMPT,
   });
   const r = await model.generateContent(userMsg);
@@ -189,7 +215,7 @@ async function callClaude(userMsg: string): Promise<unknown> {
   const ai = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
   const r = await ai.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 4000,
+    max_tokens: MAX_OUTPUT_TOKENS,
     system: SPEC_SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMsg }],
   });
@@ -206,6 +232,7 @@ async function callOpenAI(userMsg: string): Promise<unknown> {
     model: "gpt-4o-mini",
     response_format: { type: "json_object" },
     temperature: 0.2,
+    max_tokens: MAX_OUTPUT_TOKENS,
     messages: [
       { role: "system", content: SPEC_SYSTEM_PROMPT },
       { role: "user",   content: userMsg },
@@ -272,12 +299,18 @@ export async function generateRoomEdit(args: {
 }> {
   const userMsg = `Current room: ${JSON.stringify(args.room)}\nInstruction: "${args.instruction}"`;
 
+  const ROOM_EDIT_TOKENS = 400;
+
   const tryProvider = async (id: Exclude<ProviderId, "demo">) => {
     if (id === "gemini") {
       const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
       const model = ai.getGenerativeModel({
         model: "gemini-2.0-flash",
-        generationConfig: { responseMimeType: "application/json", temperature: 0.3 },
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.3,
+          maxOutputTokens: ROOM_EDIT_TOKENS,
+        },
         systemInstruction: ROOM_EDIT_SYSTEM,
       });
       const r = await model.generateContent(userMsg);
@@ -287,7 +320,7 @@ export async function generateRoomEdit(args: {
       const ai = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
       const r = await ai.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 500,
+        max_tokens: ROOM_EDIT_TOKENS,
         system: ROOM_EDIT_SYSTEM,
         messages: [{ role: "user", content: userMsg }],
       });
@@ -297,12 +330,12 @@ export async function generateRoomEdit(args: {
         .join("");
       return JSON.parse(extractJsonObject(text));
     }
-    // openai
     const ai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
     const r = await ai.chat.completions.create({
       model: "gpt-4o-mini",
       response_format: { type: "json_object" },
       temperature: 0.3,
+      max_tokens: ROOM_EDIT_TOKENS,
       messages: [
         { role: "system", content: ROOM_EDIT_SYSTEM },
         { role: "user",   content: userMsg },
@@ -317,9 +350,11 @@ export async function generateRoomEdit(args: {
   if (process.env.OPENAI_API_KEY)    order.push("openai");
 
   for (const id of order) {
+    if (isOverBudget(id, ROOM_EDIT_TOKENS)) continue;
     try {
       const raw = await tryProvider(id);
       const parsed = RoomEditSchema.parse(raw);
+      recordTokenUsage(id, ROOM_EDIT_TOKENS);
       return { ...parsed, source: id };
     } catch {
       // try next
