@@ -1,8 +1,10 @@
 import type { Config } from "tailwindcss";
 import animate from "tailwindcss-animate";
 
+const rgb = (token: string) => `rgb(var(--${token}) / <alpha-value>)`;
+
 const config: Config = {
-  darkMode: ["class"],
+  darkMode: ["class", "[data-theme='dark']"],
   content: [
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
@@ -15,79 +17,127 @@ const config: Config = {
       padding: "1rem",
       screens: { "2xl": "1400px" },
     },
+    fontSize: {
+      "3xs": ["10px", { lineHeight: "1.2" }],
+      "2xs": ["11px", { lineHeight: "1.2" }],
+      xs:    ["12px", { lineHeight: "1.4" }],
+      sm:    ["13px", { lineHeight: "1.4" }],
+      base:  ["14px", { lineHeight: "1.55" }],
+      md:    ["16px", { lineHeight: "1.55" }],
+      lg:    ["20px", { lineHeight: "1.3" }],
+      xl:    ["28px", { lineHeight: "1.2" }],
+      "2xl": ["40px", { lineHeight: "1.1" }],
+      "3xl": ["64px", { lineHeight: "1.05" }],
+      "4xl": ["96px", { lineHeight: "1.05" }],
+    },
     extend: {
       colors: {
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
-        },
-        secondary: {
-          DEFAULT: "hsl(var(--secondary))",
-          foreground: "hsl(var(--secondary-foreground))",
-        },
-        destructive: {
-          DEFAULT: "hsl(var(--destructive))",
-          foreground: "hsl(var(--destructive-foreground))",
-        },
-        muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
-        },
+        // Surfaces
+        base:      rgb("bg-base"),
+        "surface-1": rgb("bg-surface-1"),
+        "surface-2": rgb("bg-surface-2"),
+        "surface-3": rgb("bg-surface-3"),
+        canvas:    rgb("bg-canvas"),
+
+        // Foreground
+        primary:   rgb("fg-primary"),
+        secondary: rgb("fg-secondary"),
+        tertiary:  rgb("fg-tertiary"),
+        quaternary:rgb("fg-quaternary"),
+
+        // Borders
+        "border-subtle":  rgb("border-subtle"),
+        "border-default": rgb("border-default"),
+        "border-strong":  rgb("border-strong"),
+
+        // Accent (the only one)
         accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
+          DEFAULT: rgb("accent"),
+          hover:   rgb("accent-hover"),
+          pressed: rgb("accent-pressed"),
         },
-        popover: {
-          DEFAULT: "hsl(var(--popover))",
-          foreground: "hsl(var(--popover-foreground))",
-        },
-        card: {
-          DEFAULT: "hsl(var(--card))",
-          foreground: "hsl(var(--card-foreground))",
-        },
+
+        // Functional
+        success: rgb("success"),
+        warning: rgb("warning"),
+        danger:  rgb("danger"),
+
+        // Canvas
+        "canvas-wall":      rgb("canvas-wall"),
+        "canvas-dimension": rgb("canvas-dimension"),
       },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        none: "0",
+        sm:   "var(--radius-sm)",
+        DEFAULT: "var(--radius-md)",
+        md:   "var(--radius-md)",
+        lg:   "var(--radius-lg)",
+        xl:   "var(--radius-xl)",
+        pill: "var(--radius-pill)",
+      },
+      spacing: {
+        0: "0",
+        1: "var(--space-1)",
+        2: "var(--space-2)",
+        3: "var(--space-3)",
+        4: "var(--space-4)",
+        5: "var(--space-5)",
+        6: "var(--space-6)",
+        8: "var(--space-8)",
+        10: "var(--space-10)",
+        12: "var(--space-12)",
+        16: "var(--space-16)",
+        20: "var(--space-20)",
+        24: "var(--space-24)",
+      },
+      boxShadow: {
+        sm:    "var(--shadow-sm)",
+        DEFAULT: "var(--shadow-md)",
+        md:    "var(--shadow-md)",
+        lg:    "var(--shadow-lg)",
+        xl:    "var(--shadow-xl)",
+        inset: "var(--shadow-inset)",
+      },
+      transitionDuration: {
+        instant: "var(--duration-instant)",
+        fast:    "var(--duration-fast)",
+        normal:  "var(--duration-normal)",
+        slow:    "var(--duration-slow)",
+      },
+      transitionTimingFunction: {
+        out:    "var(--ease-out)",
+        in:     "var(--ease-in)",
+        "in-out":"var(--ease-in-out)",
+        spring: "var(--ease-spring)",
       },
       keyframes: {
+        "fade-in": {
+          from: { opacity: "0" },
+          to:   { opacity: "1" },
+        },
+        "fade-in-up": {
+          from: { opacity: "0", transform: "translateY(4px)" },
+          to:   { opacity: "1", transform: "translateY(0)" },
+        },
+        "scale-in": {
+          from: { opacity: "0", transform: "scale(0.97)" },
+          to:   { opacity: "1", transform: "scale(1)" },
+        },
         "accordion-down": {
           from: { height: "0" },
-          to: { height: "var(--radix-accordion-content-height)" },
+          to:   { height: "var(--radix-accordion-content-height)" },
         },
         "accordion-up": {
           from: { height: "var(--radix-accordion-content-height)" },
-          to: { height: "0" },
-        },
-        "fade-in": {
-          from: { opacity: "0" },
-          to: { opacity: "1" },
-        },
-        "slide-up": {
-          from: { transform: "translateY(8px)", opacity: "0" },
-          to: { transform: "translateY(0)", opacity: "1" },
-        },
-        shimmer: {
-          "0%": { backgroundPosition: "-200% 0" },
-          "100%": { backgroundPosition: "200% 0" },
+          to:   { height: "0" },
         },
       },
       animation: {
-        "accordion-down": "accordion-down 0.2s ease-out",
-        "accordion-up": "accordion-up 0.2s ease-out",
-        "fade-in": "fade-in 0.3s ease-out",
-        "slide-up": "slide-up 0.3s ease-out",
-        shimmer: "shimmer 2s linear infinite",
-      },
-      backgroundImage: {
-        "grid-pattern":
-          "linear-gradient(to right, hsl(var(--border) / 0.4) 1px, transparent 1px), linear-gradient(to bottom, hsl(var(--border) / 0.4) 1px, transparent 1px)",
+        "fade-in":     "fade-in    var(--duration-fast) var(--ease-out)",
+        "fade-in-up":  "fade-in-up var(--duration-normal) var(--ease-out)",
+        "scale-in":    "scale-in   var(--duration-normal) var(--ease-spring)",
+        "accordion-down":"accordion-down 0.2s ease-out",
+        "accordion-up":  "accordion-up   0.2s ease-out",
       },
     },
   },
