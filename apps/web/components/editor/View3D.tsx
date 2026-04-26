@@ -44,12 +44,13 @@ export function View3D() {
       <Canvas
         shadows
         camera={{
+          // Lower, more architectural angle — closer to a renderer's hero shot
           position: [
-            (plan.plot.w * MM_TO_M) * 1.4,
-            Math.max(plan.plot.w, plan.plot.h) * MM_TO_M * 0.9,
-            (plan.plot.h * MM_TO_M) * 1.4,
+            (plan.plot.w * MM_TO_M) * 1.05,
+            Math.max(plan.plot.w, plan.plot.h) * MM_TO_M * 0.55,
+            (plan.plot.h * MM_TO_M) * 1.45,
           ],
-          fov: 45,
+          fov: 38,
           near: 0.1,
           far: 1000,
         }}
@@ -168,6 +169,9 @@ function Scene({
 
       {/* Interior walls — derived from shared edges between rooms */}
       <InteriorWalls plan={plan} />
+
+      {/* Doors + windows in 3D (rendered on the perimeter the openings sit on) */}
+      <OpeningsLayer plan={plan} />
 
       {/* Roof slab (toggleable) */}
       {showRoof && (
@@ -336,6 +340,79 @@ function RoomFloor({ room, accent }: { room: SolvedRoom; accent: string }) {
       <planeGeometry args={[w, d]} />
       <meshStandardMaterial color={baseColor} roughness={0.7} side={THREE.DoubleSide} />
     </mesh>
+  );
+}
+
+function OpeningsLayer({ plan }: { plan: SolvedPlan }) {
+  const W = plan.plot.w * MM_TO_M;
+  const H = plan.plot.h * MM_TO_M;
+  return (
+    <>
+      {plan.openings.map((op) => {
+        // Each solver opening sits on either a perimeter wall (entry/window
+        // on the outside) or between two rooms. We pick a position + rotation
+        // by inspecting the opening's bbox.
+        const x = op.x * MM_TO_M;
+        const z = op.y * MM_TO_M;
+        const w = op.w * MM_TO_M;
+        const h = op.h * MM_TO_M;
+
+        // dir 'h' = the opening sits along a horizontal wall (top or bottom of plot)
+        // dir 'v' = the opening sits along a vertical wall (left or right of plot)
+        const isHorizontal = op.dir === "h";
+        const cx = x + w / 2;
+        const cz = z + h / 2;
+
+        // Window dims: sill at 0.9m, height ~1.2m. Doors: full-height 2.1m.
+        const isDoor = op.type === "door";
+        const sill = isDoor ? 0 : 0.9;
+        const opH = isDoor ? 2.1 : 1.2;
+        const wallThk = isHorizontal ? h : w;
+
+        // Frame width (along wall)
+        const frameW = isHorizontal ? w : h;
+
+        return (
+          <group key={op.id} position={[cx, sill + opH / 2, cz]} rotation={[0, isHorizontal ? 0 : Math.PI / 2, 0]}>
+            {/* Frame — thin box around the perimeter */}
+            <mesh castShadow>
+              <boxGeometry args={[frameW + 0.02, opH + 0.02, wallThk * 0.9]} />
+              <meshStandardMaterial color={isDoor ? "#5b3a1f" : "#27272a"} roughness={0.55} />
+            </mesh>
+            {/* Inner cut — punches the wall fill so the opening reads through */}
+            <mesh>
+              <boxGeometry args={[frameW - 0.06, opH - 0.06, wallThk * 1.05]} />
+              <meshBasicMaterial color="#0a0a0b" />
+            </mesh>
+            {isDoor ? (
+              // Door leaf, slightly ajar
+              <group position={[-frameW / 2, 0, 0]} rotation={[0, -0.55, 0]}>
+                <mesh castShadow position={[frameW / 2 - 0.04, 0, 0]}>
+                  <boxGeometry args={[frameW - 0.1, opH - 0.1, 0.04]} />
+                  <meshStandardMaterial color="#a16207" roughness={0.4} />
+                </mesh>
+              </group>
+            ) : (
+              // Glass pane
+              <mesh>
+                <boxGeometry args={[frameW - 0.12, opH - 0.12, 0.02]} />
+                <meshPhysicalMaterial
+                  color="#bae6fd"
+                  metalness={0.05}
+                  roughness={0.05}
+                  transmission={0.85}
+                  transparent
+                  opacity={0.45}
+                />
+              </mesh>
+            )}
+          </group>
+        );
+      })}
+
+      {/* Suppress unused */}
+      {(() => { void W; void H; return null; })()}
+    </>
   );
 }
 

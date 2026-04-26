@@ -62,6 +62,14 @@ export function HeroPrompt() {
       };
       setActiveFloor({ spec: data.spec, plan: data.plan, planIR: data.planIR, boq: data.boq });
       setStatus({ kind: "ok", text: `Plan generated · ${data.source ?? "ok"}` });
+      const rooms = data.plan.rooms.length;
+      const cost = data.boq?.grand_total_inr;
+      const costStr = cost
+        ? cost >= 1e7
+          ? `₹${(cost / 1e7).toFixed(2)} Cr`
+          : `₹${(cost / 1e5).toFixed(2)} L`
+        : "—";
+      toast(`Plan ready · ${rooms} rooms · ${costStr} estimated`, { kind: "success" });
     } catch (e) {
       setError((e as Error).message);
       setStatus({ kind: "err", text: "Generation failed" });

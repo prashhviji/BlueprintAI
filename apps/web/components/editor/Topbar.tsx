@@ -2,8 +2,9 @@
 
 import * as React from "react";
 import { Share, Download, ChevronDown } from "@/components/icons";
-import { useEditor } from "@/lib/store/editor";
+import { useEditor, selectActiveFloor } from "@/lib/store/editor";
 import { Button } from "@/components/ui/button";
+import { formatINRShort } from "@/lib/utils";
 
 export function Topbar({
   onExport,
@@ -13,10 +14,14 @@ export function Topbar({
   const projectName = useEditor((s) => s.projectName);
   const setProjectName = useEditor((s) => s.setProjectName);
   const status = useEditor((s) => s.status);
+  const hasGenerated = useEditor((s) => s.hasGenerated);
+  const activeFloor = useEditor(selectActiveFloor);
   const [exportOpen, setExportOpen] = React.useState(false);
 
   const dotColor =
     status.kind === "err" ? "rgb(var(--danger))" : status.kind === "gen" ? "rgb(var(--warning))" : "rgb(var(--success))";
+
+  const grandTotal = activeFloor.boq?.grand_total_inr ?? 0;
 
   return (
     <div
@@ -37,11 +42,19 @@ export function Topbar({
         />
       </div>
 
-      <div className="flex justify-center">
+      <div className="flex justify-center items-center gap-2">
         <div className="inline-flex items-center gap-2 mono text-xs text-secondary px-2.5 py-1 border border-border-subtle rounded surface-2">
           <span className="size-1.5 rounded-pill" style={{ background: dotColor }} />
           {status.text}
         </div>
+        {hasGenerated && grandTotal > 0 && (
+          <div className="inline-flex items-center gap-2 px-2.5 py-1 border border-[var(--accent-edge)] rounded surface-2">
+            <span className="micro-label !text-2xs text-tertiary">Estimated</span>
+            <span className="display text-sm font-semibold text-primary tabular-nums" style={{ letterSpacing: "-0.01em" }}>
+              {formatINRShort(grandTotal)}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-end gap-2">

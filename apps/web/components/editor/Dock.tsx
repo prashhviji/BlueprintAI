@@ -102,6 +102,14 @@ export function Dock() {
       if (newFloor) appendNewFloor(target);
       else setActiveFloorPlan(target);
       setStatus({ kind: "ok", text: `Plan generated · ${data.source ?? "ok"}` });
+      const rooms = data.plan.rooms.length;
+      const cost = data.boq?.grand_total_inr;
+      const costStr = cost
+        ? cost >= 1e7
+          ? `₹${(cost / 1e7).toFixed(2)} Cr`
+          : `₹${(cost / 1e5).toFixed(2)} L`
+        : "—";
+      toast(`Plan ready · ${rooms} rooms · ${costStr} estimated`, { kind: "success" });
       if (data.warnings?.length) toast(data.warnings[0]!, { kind: "info" });
       setText("");
     } catch (e) {
