@@ -95,11 +95,57 @@ Firestore-backed implementation lives in `lib/firebase/projects.ts` as a TODO).
 
 ## Deployment
 
-- **Web:** Vercel (`pnpm build && next start`)
-- **Backend services:** Firebase (Auth + Firestore + Storage)
-- **Payments:** Razorpay subscriptions
+### Vercel (recommended)
 
-See `firestore.rules` for the security model.
+The app is configured to deploy as a single Vercel project pointing at the
+`apps/web` package of the pnpm workspace.
+
+**One-time setup**
+
+1. Push the repo to GitHub.
+2. In Vercel → *New Project* → import the repo.
+3. **Root Directory:** `apps/web` (this is the critical setting — Vercel will
+   auto-walk up to find `pnpm-workspace.yaml` and install the whole workspace).
+4. Framework Preset: **Next.js** (auto-detected).
+5. Build / Install / Output commands: **leave as defaults**. Vercel reads
+   [`apps/web/vercel.json`](apps/web/vercel.json) for per-route function limits
+   (LLM endpoints get 60s, PDF export gets 60s @ 1 GB, lighter routes get less).
+6. Add env vars in *Settings → Environment Variables* (all optional — see
+   `.env.example`). For prod, set them for **Production** and **Preview**:
+   - `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` — at least one to
+     leave demo mode.
+   - `NEXT_PUBLIC_FIREBASE_*` + `FIREBASE_ADMIN_*` — if you wire up Firestore.
+   - `RAZORPAY_*` — if you wire up paid plans.
+   - `CSP_REPORT_URI` — optional, for CSP violation reporting.
+7. Deploy.
+
+**Via CLI**
+
+```bash
+npm i -g vercel
+vercel link               # pick the repo, set root dir to apps/web
+vercel pull               # pull env vars
+vercel --prod             # ship
+```
+
+**Caveats**
+
+- The in-process rate limiter in
+  [`lib/security/rate-limit.ts`](apps/web/lib/security/rate-limit.ts) is
+  per-cold-start on serverless — fine for low traffic, swap for
+  `@upstash/ratelimit` if you need distributed enforcement.
+- All five API routes run on the **Node.js** runtime (PDF/DXF/Three need Node
+  APIs), not Edge.
+- Make sure `pnpm-lock.yaml` is committed — Vercel installs with
+  `--frozen-lockfile`.
+
+### Other targets
+
+- **Backend services:** Firebase (Auth + Firestore + Storage) — see
+  [`firestore.rules`](firestore.rules) for the security model.
+- **Payments:** Razorpay subscriptions.
+- **Self-host:** `pnpm build && pnpm --filter @blueprintai/web start` behind any
+  Node reverse proxy.
 
 ## License
 
